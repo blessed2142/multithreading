@@ -1,35 +1,20 @@
-#include <string>
-#include <cctype>
-#include <iostream>
-#include <map>
-#include <vector>
 #include <thread>
-#include <condition_variable>
-
-std::vector<int> data;
-std::condition_variable data_cond;
-std::mutex m;
+#include <iostream>
+#include <chrono>
+#include <mutex>
  
-void thread_func1()
-{
-   std::unique_lock<std::mutex> lock(m);
-   data.push_back(10);
-   data_cond.notify_one();
-}
+std::timed_mutex test_mutex;
  
-void thread_func2()
+void f()
 {
-   std::unique_lock<std::mutex> lock(m);
-   data_cond.wait(lock, [] {
-      return !data.empty();
-   });
-   std::cout << data.back() << std::endl;
+    auto now=std::chrono::steady_clock::now();
+    bool jk = test_mutex.try_lock_until(now + std::chrono::seconds(10));
+    std::cout << "hello world\n" << std::boolalpha << jk << std::endl;
 }
  
 int main()
 {
-   std::thread th2(thread_func2);
-   std::thread th1(thread_func1);
-   th2.join();
-   th1.join();
+    std::lock_guard<std::timed_mutex> l(test_mutex);
+    std::thread t(f);
+    t.join();
 }
