@@ -1,0 +1,106 @@
+### std::packaged_task высокоуровневая обертка над future_promise
+
+## Шаблон класса std::packaged_task обёртывает любую вызываемую цель (функцию, лямбда-выражение, bind expression или другой callable объект), чтобы ее можно было вызвать асинхронно с получением возвращаемого значения или исключения. Возвращаемое значение или вызванное исключение хранится в общем состоянии, доступ к которому можно получить через объекты std::future. 
+
+## В нашем распоряжении несколько методов:
+
+    get_future() позволяет получить связанный с состоянием задачи объект std::future, с помощью которого можно получить возвращаемое значение функции или брошенное исключение
+
+    operator() позволяет вызвать обёрнутую функцию, нужно передать аргументы функции
+
+    make_ready_at_thread_exit() позволяет дождаться полного завершения потока перед тем, как привести future в состояние готовности
+
+    reset() очищает результаты предыдущего запуска задачи
+
+1 пример
+// unique function to avoid disambiguating the std::pow overload set
+int f(int x, int y) { return std::pow(x,y); }
+ 
+void task_lambda()
+{
+    std::packaged_task<int(int,int)> task([](int a, int b) {
+        return std::pow(a, b); 
+    });
+    std::future<int> result = task.get_future();
+ 
+    task(2, 9);
+ 
+    std::cout << "task_lambda:\t" << result.get() << '\n';
+}
+ 
+void task_bind()
+{
+    std::packaged_task<int()> task(std::bind(f, 2, 11));
+    std::future<int> result = task.get_future();
+ 
+    task();
+ 
+    std::cout << "task_bind:\t" << result.get() << '\n';
+}
+ 
+void task_thread()
+{
+    std::packaged_task<int(int,int)> task(f);
+    std::future<int> result = task.get_future();
+ 
+    std::thread task_td(std::move(task), 2, 10);
+    task_td.join();
+ 
+    std::cout << "task_thread:\t" << result.get() << '\n';
+}
+ 
+int main()
+{
+    task_lambda();
+    task_bind();
+    task_thread();
+}
+
+## Пример с ожиданием полного завершения потока:
+void worker(std::future<void>& output)
+{
+    std::packaged_task<void(bool&)> my_task{ [](bool& done) { done=true; } };
+ 
+    auto result = my_task.get_future();
+ 
+    bool done = false;
+ 
+    my_task.make_ready_at_thread_exit(done); // execute task right away
+ 
+    std::cout << "worker: done = " << std::boolalpha << done << std::endl;
+ 
+    auto status = result.wait_for(std::chrono::seconds(0));
+    if (status == std::future_status::timeout)
+        std::cout << "worker: result is not ready yet" << std::endl;
+ 
+    output = std::move(result);
+}
+ 
+ 
+int main()
+{
+    std::future<void> result;
+ 
+    std::thread{worker, std::ref(result)}.join();
+ 
+    auto status = result.wait_for(std::chrono::seconds(0));
+    if (status == std::future_status::ready)
+        std::cout << "main: result is ready" << std::endl;
+}
+
+## Пример со сбросом результатов предыдущего выполнения: 
+int main()
+{
+    std::packaged_task<int(int,int)> task([](int a, int b) {
+        return std::pow(a, b);
+    });
+    std::future<int> result = task.get_future();
+    task(2, 9);
+    std::cout << "2^9 = " << result.get() << '\n';
+ 
+    task.reset();
+    result = task.get_future();
+    std::thread task_td(std::move(task), 2, 10);
+    task_td.join();
+    std::cout << "2^10 = " << result.get() << '\n';
+}

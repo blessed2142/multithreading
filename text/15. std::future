@@ -1,0 +1,73 @@
+### std::shared_future 
+
+## Если наступления одного и того же события нужно дожидаться сразу из нескольких потоков, следует воспользоваться std::shared_future. 
+
+## Экземпляры std::shared_future допускают копирование, поэтому могут существовать сразу несколько объектов, ссылающихся на одно и то же связанное состояние. 
+
+## Безопасность доступа к асинхронному состоянию из нескольких потоков обеспечивается, если каждый поток обращается к этому состоянию посредством собственного объекта std::shared_future.
+Сконструировать объект std::shared_future можно либо передав право собственности его конструктору из std::future с помощью std::move:
+     std::shared_future sf(std::move(future));
+
+## Для r-value вызов std::move не требуется:
+
+     std::promise<int> p;
+     std::shared_future<int> sf(p.get_future());
+
+     std::promise<int> p;
+     auto sf = p.get_future().share();
+
+## Пример использования std::shared_future для реализации барьера:
+
+#include <iostream>
+#include <future>
+#include <chrono>
+ 
+int main()
+{   
+    std::promise<void> ready_promise, t1_ready_promise, t2_ready_promise;
+    std::shared_future<void> ready_future(ready_promise.get_future());
+ 
+    std::chrono::time_point<std::chrono::high_resolution_clock> start;
+ 
+    auto fun1 = [&, ready_future]() -> std::chrono::duration<double, std::milli> 
+    {
+        t1_ready_promise.set_value();
+        ready_future.wait(); // waits for the signal from main()
+        return std::chrono::high_resolution_clock::now() - start;
+    };
+ 
+ 
+    auto fun2 = [&, ready_future]() -> std::chrono::duration<double, std::milli> 
+    {
+        t2_ready_promise.set_value();
+        ready_future.wait(); // waits for the signal from main()
+        return std::chrono::high_resolution_clock::now() - start;
+    };
+ 
+    auto fut1 = t1_ready_promise.get_future();
+    auto fut2 = t2_ready_promise.get_future();
+ 
+    auto result1 = std::async(std::launch::async, fun1);
+    auto result2 = std::async(std::launch::async, fun2);
+ 
+    // wait for the threads to become ready
+    fut1.wait();
+    fut2.wait();
+ 
+    // the threads are ready, start the clock
+    start = std::chrono::high_resolution_clock::now();
+ 
+    // signal the threads to go
+    ready_promise.set_value();
+ 
+    std::cout << "Thread 1 received the signal "
+              << result1.get().count() << " ms after start\n"
+              << "Thread 2 received the signal "
+              << result2.get().count() << " ms after start\n";
+}
+
+/*
+Возможный вывод:
+Thread 1 received the signal 0.072 ms after start
+Thread 2 received the signal 0.041 ms after start
+*/

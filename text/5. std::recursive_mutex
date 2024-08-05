@@ -1,0 +1,27 @@
+### std::recursive_mutex
+
+## Класс recursive_mutex — это примитив синхронизации, который может использоваться для защиты общих данных от одновременного доступа нескольких потоков.
+
+## recursive_mutex предлагает эксклюзивную рекурсивную семантику владения:
+
+# Вызывающий поток владеет recursive_mutex в течение периода времени, который начинается, когдаон успешно вызывает либо lock, либо try_lock. В течение этого периода поток может совершатьдополнительные вызовы lock или try_lock. Период владения заканчивается, когда поток делаетсоответствующее количество вызовов unlock.
+# Когда поток владеет recursive_mutex, все остальные потоки будут ждать (для lock) или получатьfalse (для try_lock), если они попытаются захватить recursive_mutex.
+# Максимальное количество раз, которое recursive_mutex может быть заблокирован, в стандарте не указано, но после достижения этого числа вызовы lock будут бросать std::system_error, а вызовы try_lock будут возвращать false. 
+
+class X {
+    std::recursive_mutex m;
+    std::string shared;
+  public:
+    void fun1() {
+      std::lock_guard<std::recursive_mutex> lk(m); // 2 
+      shared = "fun1";
+      std::cout << "in fun1, shared variable is now " << shared << '\n';
+    }
+    void fun2() {
+      std::lock_guard<std::recursive_mutex> lk(m); // 1
+      shared = "fun2";
+      std::cout << "in fun2, shared variable is now " << shared << '\n';
+      fun1(); // recursive lock becomes useful here
+      std::cout << "back in fun2, shared variable is " << shared << '\n';
+    };
+};

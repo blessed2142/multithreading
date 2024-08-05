@@ -1,0 +1,66 @@
+### std::lock_guard ###
+# Это простой класс, конструктор которого вызывает метод lock для заданного объекта, а деструктор вызывает unlock. Также в конструктор класса std::lock_guard можно передать аргумент std::adopt_lock — индикатор, означающий, что mutex уже заблокирован и блокировать его заново не надо. std::lock_guard не содержит никаких других методов, и его нельзя копировать, переносить или присваивать. 
+
+# Пример использования 
+ int g_i = 0;
+ std::mutex g_i_mutex;  // protects g_i
+  
+ void safe_increment()
+ {
+     const std::lock_guard<std::mutex> lock(g_i_mutex);
+     ++g_i;
+  
+     std::cout << "g_i: " << g_i << "; in thread #"
+               << std::this_thread::get_id() << '\n';
+  
+     // g_i_mutex is automatically released when lock
+     // goes out of scope
+ }
+
+# adopt_lock говорит о том что mutex уже залочен, и лочить его не надо
+ void swap(X& lhs, X&rhs) {                                                                                                                               
+   if(&lhs == &rhs)
+     return;
+   // m is the std::mutex field
+   std::lock(lhs.m, rhs.m);
+   std::lock_guard<std::mutex> lock_a(lhs.m, std::adopt_lock);
+   std::lock_guard<std::mutex> lock_b(rhs.m, std::adopt_lock);
+   swap(lhs.some_detail, rhs.some_detail);
+ }
+
+
+### std::unique_lock ###
+
+# Класс unique_lock — это универсальная оболочка владения мьютексом, предоставляющая отсроченную блокировку, ограниченные по времени попытки блокировки, рекурсивную блокировку, передачу владения блокировкой и использование с condition variables. 
+
+# defer_lock создаем unique_lock но не овладеваем мутехами 
+void transfer(Box &from, Box &to, int num)
+ {
+     // don't actually take the locks yet
+     std::unique_lock<std::mutex> lock1(from.m, std::defer_lock);
+     std::unique_lock<std::mutex> lock2(to.m, std::defer_lock);
+  
+     // lock both unique_locks without deadlock
+     std::lock(lock1, lock2);
+  
+     from.num_things -= num;
+     to.num_things += num;
+  
+     // 'from.m' and 'to.m' mutexes unlocked in 'unique_lock' dtors
+ }
+
+## Рекурсивная блокировка:
+# std::unique_lock можно использовать с мьютексами, поддерживающими рекурсивную блокировку. Это не значит, что для одного и того же unique_lock можно несколько раз вызвать метод lock(). Это значит, что в одном потоке несколько разных экземпляров std::unique_lock могут вызвать метод lock() для одного и того же мьютекса. Повторный же вызов метода lock() для одного и того же экземпляра std::unique_lock приводит к исключению. Подробнее про работу рекурсивных мьютексов будет написано далее. 
+
+## Объекты std::unique_lock являются перемещаемыми. Владение мьютексом может передаваться между экземплярами std::unique_lock путем перемещения. В некоторых случаях, например, при возвращении экземпляра из функции, оно происходит автоматически, а в других случаях его необходимо выполнять явным образом вызовом функции std::move().
+# Один из вариантов возможного использования заключается в разрешении функции заблокировать мьютекс, а затем передать владение этой блокировкой вызывающему коду
+ std::unique_lock<std::mutex> get_lock() {
+     extern std::mutex some_mutex;
+     std::unique_lock<std::mutex> lk(some_mutex);
+     prepare_data();
+     return lk;
+ }
+ void process_data() {
+     std::unique_lock<std::mutex> lk(get_lock());
+     do_something();
+ }

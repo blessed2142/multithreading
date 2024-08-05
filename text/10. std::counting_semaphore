@@ -1,0 +1,63 @@
+### counting_semaphore содержит внутренний счетчик, который инициализируется конструктором. Этот счетчик уменьшается при вызовах метода acquire() и связанных с ним методов и увеличивается при вызовах метода release(). Когда счетчик равен нулю, acquire() блокирует поток до тех пор, пока счетчик не увеличится. Кроме того, для использования доступны методы:
+
+## try_acquire() не блокирует поток, а возвращает вместо этого false. Подобно std::condition_variable::wait(), метод try_acquire() может ошибочно возвращать false.
+## try_acquire_for() и try_acquire_until() блокируют до тех пор, пока счетчик не увеличится или не будет достигнут таймаут.
+
+Семафоры нельзя копировать и перемещать.
+
+Методы acquire() уменьшают значение счётчика семафора на 1. Методу release() можно передать в качестве параметра значение, на которое должен быть увеличен счётчик, по умолчанию значение равно 1.
+
+// global binary semaphore instances
+// object counts are set to zero
+// objects are in non-signaled state
+std::binary_semaphore
+    smphSignalMainToThread(0),
+    smphSignalThreadToMain(0);
+ 
+void ThreadProc()
+{    
+    // wait for a signal from the main proc
+    // by attempting to decrement the semaphore
+    smphSignalMainToThread.acquire();
+ 
+    // this call blocks until the semaphore's count
+    // is increased from the main proc
+ 
+    std::cout << "[thread] Got the signal\n"; // response message
+ 
+    // wait for 3 seconds to imitate some work
+    // being done by the thread
+    using namespace std::literals;
+    std::this_thread::sleep_for(3s);
+ 
+    std::cout << "[thread] Send the signal\n"; // message
+ 
+    // signal the main proc back
+    smphSignalThreadToMain.release();
+}
+ 
+int main()
+{
+    // create some worker thread
+    std::thread thrWorker(ThreadProc);
+ 
+    std::cout << "[main] Send the signal\n"; // message
+ 
+    // signal the worker thread to start working
+    // by increasing the semaphore's count
+    smphSignalMainToThread.release();
+ 
+    // wait until the worker thread is done doing the work
+    // by attempting to decrement the semaphore's count
+    smphSignalThreadToMain.acquire();
+ 
+    std::cout << "[main] Got the signal\n"; // response message
+    thrWorker.join();
+}
+/*
+Вывод:
+[main] Send the signal
+[thread] Got the signal
+[thread] Send the signal
+[main] Got the signal
+*/

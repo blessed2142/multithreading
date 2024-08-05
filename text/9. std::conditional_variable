@@ -1,0 +1,157 @@
+### std::condition_variable
+
+## Класс condition_variable — это примитив синхронизации, который может использоваться для блокировки потока или нескольких потоков до тех пор, пока другой поток не изменит общую переменную (не выполнит условие) и не уведомит об этом condition_variable.
+
+# Поток, который намеревается изменить общую переменную, должен:
+
+    захватить std::mutex (обычно через std::lock_guard)
+
+    выполнить модификацию, пока удерживается блокировка мьютекса
+
+    выполнить notify_one или notify_all на std::condition_variable (блокировка не должна удерживаться для уведомления) 
+
+# Даже если общая переменная является атомарной, всё равно требуется использовать мьютекс для корректного оповещения ожидающих потоков.
+
+# Любой поток, который ожидает наступления события от std::condition_variable, должен:
+
+    С помощью std::unique_lock<std::mutex> получить блокировку того же мьютекса, который используется для защиты общей переменной.
+
+    Проверить, что необходимое условие ещё не выпонлено.
+
+    Вызвать метод wait, wait_for или wait_until. Операции ожидания освобождают мьютекс и приостанавливают выполнение потока.
+
+    Когда получено уведомление, истёк тайм-аут или произошло ложное пробуждение, поток пробуждается, и мьютекс повторно блокируется. Затем поток должен проверить, что условие, действительно, выполнено, и возобновить ожидание, если пробуждение было ложным. 
+
+# Вместо трёх последних шагов можно воспользоваться перегрузкой методов wait, wait_for и wait_until, которая принимает предикат для проверки условия и выполняет три последних шага.
+
+# std::condition_variable работает только с std::unique_lock<std::mutex>; это ограничение обеспечивает максимальную эффективность на некоторых платформах. std::condition_variable_any работает с любым BasicLockable объектом, например, с std::shared_lock.
+
+# Condition variables допускают одновременный вызов методов wait, wait_for, wait_until, notify_one и notify_all из разных потоков. 
+
+#include <iostream>
+#include <string>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+ 
+std::mutex m;
+std::condition_variable cv;
+std::string data;
+bool ready = false;
+bool processed = false;
+ 
+void worker_thread()
+{
+    // Wait until main() sends data
+    std::unique_lock<std::mutex> lk(m);
+    cv.wait(lk, []{return ready;});
+ 
+    // after the wait, we own the lock.
+    std::cout << "Worker thread is processing data\n";
+    data += " after processing";
+ 
+    // Send data back to main()
+    processed = true;
+    std::cout << "Worker thread signals data processing completed\n";
+ 
+    // Manual unlocking is done before notifying, to avoid waking up
+    // the waiting thread only to block again (see notify_one for details)
+    lk.unlock();
+    cv.notify_one();
+}
+ 
+int main()
+{
+    std::thread worker(worker_thread);
+ 
+    data = "Example data";
+    // send data to the worker thread
+    {
+        std::lock_guard<std::mutex> lk(m);
+        ready = true;
+        std::cout << "main() signals data ready for processing\n";
+    }
+    cv.notify_one();
+ 
+    // wait for the worker
+    {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait(lk, []{return processed;});
+    }
+    std::cout << "Back in main(), data = " << data << '\n';
+ 
+    worker.join();
+}
+/*
+Возможный вывод:
+main() signals data ready for processing
+Worker thread is processing data
+Worker thread signals data processing completed
+Back in main(), data = Example data after processing
+*/
+
+std::notify_all_at_thread_exit
+
+Стандартная библиотека предоставляет ещё одну функцию для использования в ситуациях, когда мы с помощью condition_variable хотим дождаться завершения потока.
+
+Зачем это нужно?
+
+N2880: C++ object lifetime interactions with the threads API
+
+N3070 - Handling Detached Threads and thread_local Variables
+
+Допустим, мы хотим дождаться завершения detached потока, в этом случае мы не можем использовать метод join для ожидания завершения потока. Тогда мы решаем, что нужно использовать condition_variable для уведомления о том, что поток завершается. Но если мы просто в конец функции, выполняемой в отдельном потоке, добавим cv.notify_all();, то получим поведение отличное от того, которое нам нужно. Несмотря на то, что эта команда будет последней в функции потока, поток на ней ещё не заканчивает выполнение. После вызова notify_all в этом же потоке будет происходить уничтожение thread_local переменных, будут вызываться их деструкторы и выполняться какие-либо действия. То есть, на самом деле, уведомление было отправлено ещё до того, как поток завершился.
+
+Тогда как на самом деле дождаться полного завершения detached потока? Для этого стандартная библиотека предоставляет функцию std::notify_all_at_thread_exit. Она дожидается завершения потока, в том числе уничтожения thread_local переменных, и последними действиями в потоке выполняет:
+
+lk.unlock();
+cond.notify_all();
+
+Эквивалентный эффект может быть достигнут с помощью средств, предоставляемых std::promise или std::packaged_task.
+
+Пример использования:
+
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+ 
+#include <cassert>
+#include <string>
+ 
+std::mutex m;
+std::condition_variable cv;
+ 
+bool ready = false;
+std::string result; // some arbitrary type
+ 
+void thread_func()
+{
+    thread_local std::string thread_local_data = "42";
+ 
+    std::unique_lock<std::mutex> lk(m);
+ 
+    // assign a value to result using thread_local data
+    result = thread_local_data;
+    ready = true;
+ 
+    std::notify_all_at_thread_exit(cv, std::move(lk));
+ 
+}   // 1. destroy thread_locals;
+    // 2. unlock mutex;
+    // 3. notify cv.
+ 
+int main()
+{
+    std::thread t(thread_func);
+    t.detach();
+ 
+    // do other work
+    // ...
+ 
+    // wait for the detached thread
+    std::unique_lock<std::mutex> lk(m);
+    cv.wait(lk, []{ return ready; });
+ 
+    // result is ready and thread_local destructors have finished, no UB
+    assert(result == "42");
+}

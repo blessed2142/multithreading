@@ -1,0 +1,87 @@
+### std::future и std::promise
+
+## std::promise — это базовый механизм, позволяющий передавать значение между потоками. Каждый объект std::promise связан с объектом std::future. Это пара классов, один из которых (std::promise) отвечает за установку значения, а другой (std::future) — за его получение. Первый поток может ожидать установки значения с помощью вызова метода std::future::wait или std::future::get, в то время, как второй поток установит это значение с помощью вызова метода std::promise::set_value, или передаст первому исключение вызовом метода std::promise::set_exception.
+
+## Сохранение результата или исключения в std::promise приводит операцию в состояние готовности. Эта операция разблокирует поток, ожидающий результата. Если объект promise был уничтожен, а результат (значение или исключение) не был сохранён, то сохраняется исключение типа std::future_error с кодом ошибки std::future_errc::broken_promise, происходит приведение в состояние готовности. 
+
+    объект std::promise предназначен для использования только один раз, запросить значение (get()) из std::future можно только один раз.
+
+    с помощью std::future результата может дожидаться только один поток.. Параллельный доступ к одному и тому же общему состоянию может приводить к конфликтам.
+
+### std::promise::
+
+    get_future() позволяет получить объект std::future, связанный с нашим объектом std::promise
+
+    set_value(value) сохраняет значение, которое можно запросить с помощью связанного объекта std::future
+
+    set_exception(exception) сохраняет исключение, которое будет брошено в потоке, запросившем значение из объекта std::future
+
+    set_value_at_thread_exit() и set_exception_at_thread_exit() сохраняют значение или исключение после завершения потока аналогично тому, как работает std::notify_all_at_thread_exit  
+
+### std::future::
+
+    get() Дожидается, когда promise сохранит результат, и возвращает его. После вызова метода объект future удаляет ссылку на общее состояние, и метод valid() начинает возвращать false. Вызов для невалидного (valid() возвращает false) объекта приводит к неопределённому поведению или исключению (зависит от реализации). Если в promise было записано исключение, то оно будет брошено при вызове.
+
+    valid() Проверяет, связан ли объект future с каким-то общим состоянием. Вызов других методов для невалидного объекта приводит к неопределённому поведению или исключению (зависит от реализации).
+
+    wait() Блокирует текущий поток, пока promise не запишет значение. Вызов для невалидного (valid() возвращает false) объекта приводит к неопределённому поведению или исключению (зависит от реализации).
+
+    wait_for() и wait_until() Работают аналогично методу wait, но с ограничением на время ожидания. Возвращают future_status.
+
+    share() Конструирует и возвращает shared_future. Несколько объектов std::shared_future могут ссылаться на одно и то же общее состояние, что невозможно для std::future. После вызова метода объект future удаляет ссылку на общее состояние, и метод valid() начинает возвращать false. 
+
+void accumulate(std::vector<int>::iterator first,
+                std::vector<int>::iterator last,
+                std::promise<int> accumulate_promise)
+{
+    int sum = std::accumulate(first, last, 0);
+    accumulate_promise.set_value(sum);  // Notify future
+}
+ 
+int main()
+{
+    // Demonstrate using promise<int> to transmit a result between threads.
+    std::vector<int> numbers = { 1, 2, 3, 4, 5, 6 };
+    std::promise<int> accumulate_promise;
+    std::future<int> accumulate_future = accumulate_promise.get_future();
+    std::thread work_thread(accumulate, numbers.begin(), numbers.end(),
+                            std::move(accumulate_promise));
+ 
+    // future::get() will wait until the future has a valid result and retrieves it.
+    // Calling wait() before get() is not needed
+    //accumulate_future.wait();  // wait for result
+    std::cout << "result=" << accumulate_future.get() << '\n';
+    work_thread.join();  // wait for thread completion
+}
+
+## Обычно для исключения, выдаваемого в качестве части алгоритма, это делается в блоке catch:
+
+extern std::promise<double> some_promise;
+try{
+    some_promise.set_value(square_root(x));
+}
+catch(...){
+    some_promise.set_exception(std::current_exception());
+}
+
+some_promise.set_exception(std::make_exception_ptr(std::logic_error("foo ")));
+
+## Передача событий без состояния
+
+# promise-future можно использовать не только для передачи значения, но и просто для уведомления (хотя для этого можно использовать condition variables), если сохранить тип void. Например, можно сделать барьер (в С++20 для этого есть специальные средства). 
+
+void do_work(std::promise<void> barrier)
+{
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    barrier.set_value();
+}
+ 
+int main()
+{
+    // Demonstrate using promise<void> to signal state between threads.
+    std::promise<void> barrier;
+    std::future<void> barrier_future = barrier.get_future();
+    std::thread new_work_thread(do_work, std::move(barrier));
+    barrier_future.wait();
+    new_work_thread.join();
+}
